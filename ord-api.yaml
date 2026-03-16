@@ -1,0 +1,298 @@
+openapi: 3.0.3
+info:
+  title: Order Service API
+  version: 1.2.0
+  description: |
+    # Order Service
+    Сервис управления жизненным циклом заказов и корзинами пользователей.
+    
+    ### Основные функции:
+    * **Управление корзиной:** Поддержка временных корзин с ограничением на одно заведение [1].
+    * **Создание заказов:** Фиксация цен и названий продуктов через снэпшоты на момент покупки [1, 2].
+    * **Коды получения:** Генерация и валидация 6-значных уникальных кодов выдачи [1, 3].
+    * **Статусы заказов:** Управление переходами состояний (created → paid → picked_up) [1, 4].
+    
+    Владеет базой данных `db_order` [1, 5].
+  contact:
+    name: Senior Backend Team
+    email: backend-lead@company.com
+
+servers:
+  - url: https://api.gateway.com/orders/v1
+    description: Production Server (via API Gateway) [1]
+  - url: http://localhost:8004/api/v1
+    description: Local Development Server [1]
+
+tags:
+  - name: Carts
+    description: Операции с корзиной пользователя (одна корзина на заведение) [1]
+  - name: Orders
+    description: История и детали заказов пользователя [1]
+  - name: Management
+    description: Управление заказами для сотрудников заведений (staff) [6]
+  - name: Health
+    description: Проверка работоспособности сервиса [7]
+
+# =============================================
+# SECURITY & HEADERS (Kong Gateway Standard)
+# =============================================
+security:
+  - InternalAuth: []
+
+components:
+  securitySchemes:
+    InternalAuth:
+      type: apiKey
+      in: header
+      name: X-User-ID
+      description: |
+        Аутентификация через заголовки от API Gateway. 
+        Gateway валидирует токен и передает ID пользователя и другие данные [8-10].
+
+  parameters:
+    # --- Headers from Gateway (Section 2.3) ---
+    HeaderXUserID:
+      name: X-User-ID
+      in: header
+      required: true
+      schema: { type: string }
+      example: "123456" [9]
+    HeaderXUserRole:
+      name: X-User-Role
+      in: header
+      schema: { type: string, enum: [user, staff, admin] } [9]
+    HeaderXUserVenueID:
+      name: X-User-Venue-ID
+      in: header
+      description: ID заведения для сотрудников [9]
+      schema: { type: integer }
+    HeaderXRequestID:
+      name: X-Request-ID
+      in: header
+      schema: { type: string }
+      description: ID запроса для трассировки (Tracing) [9, 10]
+
+    # --- Pagination (Consistent with Notification API) ---
+    PageParam:
+      name: page
+      in: query
+      schema: { type: integer, default: 1 } [11]
+    LimitParam:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 } [11]
+
+  schemas:
+    # === Order Models (Matches db_order.orders) ===
+    Order:
+      type: object
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        venue_id: { type: integer }
+        status:
+          type: string
+          enum: [created, paid, picked_up, cancelled] [1, 4]
+        total_amount: { type: number, format: decimal } [4]
+        discount_amount: { type: number, format: decimal, default: 0 } [4]
+        service_fee: { type: number, format: decimal, description: "Комиссия платформы" } [4]
+        venue_payout: { type: number, format: decimal, description: "Сумма к начислению заведению" } [4]
+        final_amount: { type: number, format: decimal } [4]
+        promo_code_id: { type: integer, nullable: true } [4]
+        pickup_time: { type: string, format: date-time, nullable: true } [4]
+        created_at: { type: string, format: date-time } [4]
+        updated_at: { type: string, format: date-time } [4]
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItem' }
+
+    OrderItem:
+      type: object
+      properties:
+        offer_id: { type: integer } [2]
+        product_name_snapshot: { type: string, example: "Набор 'Ужин'" } [2]
+        price_snapshot: { type: number, format: decimal } [2]
+        quantity: { type: integer } [2]
+        subtotal: { type: number, format: decimal } [2]
+
+    # === Cart Models (Matches db_order.carts) ===
+    Cart:
+      type: object
+      properties:
+        id: { type: integer }
+        venue_id: { type: integer, nullable: true } [2]
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CartItem' }
+        updated_at: { type: string, format: date-time } [2]
+
+    CartItem:
+      type: object
+      properties:
+        offer_id: { type: integer } [12]
+        quantity: { type: integer } [12]
+
+    PickupCode:
+      type: object
+      properties:
+        code: { type: string, pattern: '^[13-21]{6}$', example: "123456" } [1, 3]
+        expires_at: { type: string, format: date-time } [3]
+
+    # === Response Wrappers ===
+    OrderListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Order' }
+        total_count: { type: integer }
+        page: { type: integer }
+        limit: { type: integer }
+
+    ErrorDetail:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string } [22, 23]
+
+# =============================================
+# PATHS
+# =============================================
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Проверка работоспособности
+      responses:
+        '200':
+          description: OK [24]
+
+  # --- CARTS API ---
+  /api/v1/cart:
+    get:
+      tags: [Carts]
+      summary: Получить текущую корзину
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cart' }
+    delete:
+      tags: [Carts]
+      summary: Очистить корзину
+      responses:
+        '204':
+          description: Корзина очищена
+
+  /api/v1/cart/items:
+    post:
+      tags: [Carts]
+      summary: Добавить или обновить товар в корзине
+      description: Валидирует venue_id. Одна корзина может содержать товары только из одного заведения [1].
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CartItem' }
+      responses:
+        '201':
+          description: Товар добавлен
+        '400':
+          description: Попытка добавить товар из другого заведения
+
+  # --- ORDERS API ---
+  /api/v1/orders:
+    get:
+      tags: [Orders]
+      summary: История заказов пользователя
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [created, paid, picked_up, cancelled] }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Список заказов получен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderListResponse' }
+        '401':
+          description: Неавторизован [25]
+
+    post:
+      tags: [Orders]
+      summary: Создать заказ из текущей корзины
+      description: |
+        Инициирует gRPC вызов ReserveItems в Catalog Service для блокировки остатков на 15 минут [6, 26].
+      responses:
+        '201':
+          description: Заказ успешно создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+
+  /api/v1/orders/{order_id}:
+    get:
+      tags: [Orders]
+      summary: Детали конкретного заказа
+      parameters:
+        - in: path
+          name: order_id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '404':
+          description: Заказ не найден [23, 27]
+
+  /api/v1/orders/{order_id}/pickup-code:
+    get:
+      tags: [Orders]
+      summary: Получить код для получения заказа
+      description: Доступно только для оплаченных заказов [6].
+      parameters:
+        - in: path
+          name: order_id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PickupCode' }
+        '403':
+          description: Заказ еще не оплачен
+
+  # --- MANAGEMENT API (For Venue Staff) ---
+  /api/v1/management/orders/{order_id}/status:
+    patch:
+      tags: [Management]
+      summary: Изменить статус заказа
+      description: |
+        Используется сотрудниками заведения для выдачи заказа. 
+        При переводе в 'picked_up' требуется валидация 6-значного pickup_code [6].
+      parameters:
+        - in: path
+          name: order_id
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/HeaderXUserRole'
+        - $ref: '#/components/parameters/HeaderXUserVenueID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [picked_up, cancelled] }
+                pickup_code: { type: string, description: "Обязателен для выдачи" }
+      responses:
+        '200':
+          description: Статус успешно обновлен [6]
+        '403':
+          description: Неверный код или недостаточно прав [23, 28]
