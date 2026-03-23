@@ -1,24 +1,20 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 from datetime import datetime
-from enum import Enum
+from models.order import OrderStatus
 
-class OrderStatus(str, Enum):
-    created = "created"
-    paid = "paid"
-    picked_up = "picked_up"
-    cancelled = "cancelled"
-
-class OrderItem(BaseModel):
+class OrderItemBase(BaseModel):
     offer_id: int
     product_name_snapshot: str
     price_snapshot: float
     quantity: int
     subtotal: float
 
-class Order(BaseModel):
+class OrderItem(OrderItemBase):
     id: int
-    user_id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class OrderBase(BaseModel):
     venue_id: int
     status: OrderStatus
     total_amount: float
@@ -28,16 +24,21 @@ class Order(BaseModel):
     final_amount: float
     promo_code_id: Optional[int] = None
     pickup_time: Optional[datetime] = None
+
+class Order(OrderBase):
+    id: int
+    user_id: int
     created_at: datetime
     updated_at: datetime
     items: List[OrderItem] = []
+    model_config = ConfigDict(from_attributes=True)
 
 class OrderListResponse(BaseModel):
-    items: List[Order] = []
+    items: List[Order]
     total_count: int
     page: int
     limit: int
 
 class PickupCode(BaseModel):
-    code: str = Field(..., pattern=r"^\d{6}$")
+    code: str = Field(..., pattern=r'^[0-9]{6}$')
     expires_at: datetime

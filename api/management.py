@@ -1,31 +1,42 @@
-from fastapi import APIRouter, Depends, Path, HTTPException, status
-from schemas.management import OrderStatusUpdate
-from core.security import get_user_role, get_user_venue_id
+from fastapi import APIRouter, Depends, Header, HTTPException, Path
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from core.database import get_db
+from models.order import Order as OrderModel, OrderStatus
 
-# Подключаем тот же самый сервис
-from api.orders import order_service
+router = APIRouter(tags=["Management"])
 
-router = APIRouter(prefix="/api/v1/management/orders", tags=["Management"])
+class StatusUpdate(BaseModel):
+    status: str
+    pickup_code: str = None
 
-@router.patch("/{order_id}/status", summary="Изменить статус заказа")
-async def update_order_status(
-    status_update: OrderStatusUpdate,
+@router.patch("/api/v1/management/orders/{order_id}/status")
+def update_status(
+    body: StatusUpdate,
     order_id: int = Path(...),
-    user_role: str = Depends(get_user_role),
-    venue_id: int = Depends(get_user_venue_id)
+    x_user_id: str = Header(...),
+    x_user_role: str = Header(...),
+    x_user_venue_id: int = Header(...),
+    db: Session = Depends(get_db)
 ):
-    try:
-        if status_update.status.value == "picked_up":
-            order_service.update_to_picked_up(order_id, status_update.pickup_code)
-            return {"message": f"Статус заказа {order_id} обновлен на picked_up"}
-        else:
-            # Если просто отмена
-            order = order_service.repo.update_status(order_id, status_update.status.value)
-            if not order:
-                raise KeyError("Заказ не найден")
-            return {"message": f"Статус заказа {order_id} обновлен на {status_update.status.value}"}
+    if x_user_role not in ["staff", "admin"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    order = db.query(OrderModel).filter(OrderModel.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    if x_user_role == "staff" and int(x_user_venue_id) != order.venue_id:
+        raise HTTPException(status_code=403, detail="Forbidden venue")
+        
+    if body.status == "picked_up":
+        if not body.pickup_code or body.pickup_code != order.pickup_code:
+            raise HTTPException(status_code=403, detail="Invalid pickup code")
             
-    except KeyError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    try:
+        order.status = OrderStatus[body.status]
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Invalid status")
+        
+    db.commit()
+    return {"message": "Status updated successfully"}

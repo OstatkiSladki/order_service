@@ -6,6 +6,17 @@ __pycache__/
 .Python
 env/
 venv/
-*.log
-test_output*.txt
-test_flow*.sh
+
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# Env vars
+.env
+
+# Pytest cache
+.pytest_cache/
+
+# Ignore testing script manually requested by user
+test_pickup_flow.py
