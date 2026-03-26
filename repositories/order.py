@@ -1,26 +1,44 @@
-from typing import Dict, Any, List, Optional
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-# Наш In-Memory справочник
-FAKEDB_ORDERS: Dict[int, Dict[str, Any]] = {}
+from models.order import Order, OrderStatus
+
 
 class OrderRepository:
-    def create(self, order_data: dict) -> dict:
-        order_id = len(FAKEDB_ORDERS) + 1
-        order_data["id"] = order_id
-        FAKEDB_ORDERS[order_id] = order_data
-        return order_data
-        
-    def get_by_id(self, order_id: int) -> Optional[dict]:
-        return FAKEDB_ORDERS.get(order_id)
-        
-    def get_by_user_id(self, user_id: int, status: Optional[str] = None) -> List[dict]:
-        orders = [o for o in FAKEDB_ORDERS.values() if o["user_id"] == user_id]
-        if status:
-            return [o for o in orders if o["status"] == status]
-        return orders
-        
-    def update_status(self, order_id: int, status: str) -> Optional[dict]:
-        if order_id in FAKEDB_ORDERS:
-            FAKEDB_ORDERS[order_id]["status"] = status
-            return FAKEDB_ORDERS[order_id]
-        return None
+  def __init__(self, session: AsyncSession):
+    self.session = session
+
+  async def get_by_id(self, order_id: int) -> Order | None:
+    result = await self.session.execute(
+      select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+    )
+    return result.scalar_one_or_none()
+
+  async def get_by_id_for_user(self, order_id: int, user_id: int) -> Order | None:
+    result = await self.session.execute(
+      select(Order)
+      .options(selectinload(Order.items))
+      .where(Order.id == order_id, Order.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+  async def list_for_user(self, user_id: int, status: str | None, page: int, limit: int) -> tuple[list[Order], int]:
+    base_stmt = select(Order).where(Order.user_id == user_id)
+    if status:
+      try:
+        base_stmt = base_stmt.where(Order.status == OrderStatus[status])
+      except KeyError:
+        return [], 0
+
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total_count = (await self.session.execute(count_stmt)).scalar_one()
+
+    paged_stmt = (
+      base_stmt.options(selectinload(Order.items))
+      .offset((page - 1) * limit)
+      .limit(limit)
+      .order_by(Order.id.desc())
+    )
+    result = await self.session.execute(paged_stmt)
+    return result.scalars().all(), total_count
