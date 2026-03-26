@@ -18,7 +18,7 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, index=True)
     venue_id = Column(Integer, index=True)
-    status = Column(SQLEnum(OrderStatus), default=OrderStatus.created)
+    status = Column(SQLEnum(OrderStatus), default=OrderStatus.created.value)
     total_amount = Column(Float, default=0.0)
     discount_amount = Column(Float, default=0.0)
     service_fee = Column(Float, default=0.0)
