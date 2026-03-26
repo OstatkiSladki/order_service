@@ -1,76 +1,80 @@
+import secrets
+
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.order import Order, OrderItem, OrderStatus
+from repositories.cart import CartRepository
 from repositories.order import OrderRepository
-from services.cart import cart_service
-import random
-from datetime import datetime, timezone, timedelta
-from schemas.order import OrderStatus, OrderItem
+from rpc.catalog_client import get_offer_info
+from schemas.order import PickupCode
+
 
 class OrderService:
-    def __init__(self):
-        self.repo = OrderRepository()
-        
-    def checkout_cart(self, user_id: str) -> dict:
-        cart_data = cart_service.get_cart(user_id)
-        if not cart_data.get("items"):
-            raise ValueError("Корзина пуста")
-            
-        try:
-            uid = int(user_id)
-        except ValueError:
-            uid = 1
-            
-        total_amount = 0.0
-        order_items = []
-        for item in cart_data["items"]:
-            price = 100.0  # TODO: Call Catalog Service via RPC
-            qty = item["quantity"]
-            subtotal = price * qty
-            total_amount += subtotal
-            
-            order_items.append(
-                OrderItem(
-                    offer_id=item["offer_id"],
-                    product_name_snapshot=f"Товар #{item['offer_id']}",
-                    price_snapshot=price,
-                    quantity=qty,
-                    subtotal=subtotal
-                ).model_dump()
-            )
-            
-        service_fee = 10.0
-        final_amount = total_amount + service_fee
-        now = datetime.now(timezone.utc)
-        pickup_code_val = str(random.randint(100000, 999999))
-        
-        new_order_data = {
-            "user_id": uid,
-            "venue_id": cart_data.get("venue_id") or 1,
-            "status": OrderStatus.created.value,
-            "total_amount": total_amount,
-            "service_fee": service_fee,
-            "venue_payout": final_amount - service_fee,
-            "final_amount": final_amount,
-            "created_at": now,
-            "updated_at": now,
-            "items": order_items,
-            "_pickup_code": pickup_code_val
-        }
-        
-        created_order = self.repo.create(new_order_data)
-        
-        # Очищаем корзину через сервис
-        cart_service.clear_cart(user_id)
-        
-        return created_order
+  def __init__(self, session: AsyncSession):
+    self.session = session
+    self.cart_repo = CartRepository(session)
+    self.order_repo = OrderRepository(session)
 
-    def update_to_picked_up(self, order_id: int, provided_code: str) -> dict:
-        order = self.repo.get_by_id(order_id)
-        if not order:
-            raise KeyError("Заказ не найден")
-            
-        if order.get("_pickup_code") != provided_code:
-            raise PermissionError("Неверный pickup_code. Выдача заказа запрещена.")
-                                                                                    
-        updated = self.repo.update_status(order_id, "picked_up")
-        return updated
-        
-order_service = OrderService()
+  @staticmethod
+  def generate_pickup_code() -> str:
+    return str(secrets.randbelow(900000) + 100000)
+
+  async def get_orders(self, user_id: int, status: str | None, page: int, limit: int) -> tuple[list[Order], int]:
+    return await self.order_repo.list_for_user(user_id=user_id, status=status, page=page, limit=limit)
+
+  async def create_order(self, user_id: int) -> Order:
+    cart = await self.cart_repo.get_by_user_id(user_id)
+    if not cart or not cart.items:
+      raise HTTPException(status_code=400, detail="Cart is empty")
+
+    new_order = Order(
+      user_id=user_id,
+      venue_id=cart.venue_id,
+      status=OrderStatus.created,
+      pickup_code=self.generate_pickup_code(),
+    )
+    self.session.add(new_order)
+    await self.session.flush()
+
+    total_amount = 0.0
+    for item in cart.items:
+      offer_info = get_offer_info(item.offer_id)
+      subtotal = item.quantity * offer_info["price"]
+      total_amount += subtotal
+
+      order_item = OrderItem(
+        order_id=new_order.id,
+        offer_id=item.offer_id,
+        product_name_snapshot=offer_info["product_name"],
+        price_snapshot=offer_info["price"],
+        quantity=item.quantity,
+        subtotal=subtotal,
+      )
+      self.session.add(order_item)
+
+    new_order.total_amount = total_amount
+    new_order.final_amount = total_amount
+    new_order.service_fee = total_amount * 0.1
+    new_order.venue_payout = total_amount * 0.9
+
+    await self.cart_repo.clear_items(cart.id)
+    cart.venue_id = None
+    await self.session.commit()
+
+    saved_order = await self.order_repo.get_by_id(new_order.id)
+    if saved_order is None:
+      raise HTTPException(status_code=500, detail="Failed to load created order")
+    return saved_order
+
+  async def get_order(self, order_id: int, user_id: int) -> Order:
+    order = await self.order_repo.get_by_id_for_user(order_id, user_id)
+    if order is None:
+      raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+  async def get_pickup_code(self, order_id: int, user_id: int) -> PickupCode:
+    order = await self.get_order(order_id=order_id, user_id=user_id)
+    if order.status != OrderStatus.paid:
+      raise HTTPException(status_code=403, detail="Order not paid yet")
+    return PickupCode(code=order.pickup_code, expires_at=order.updated_at)
