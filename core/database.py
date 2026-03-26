@@ -1,14 +1,53 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from core.config import settings
+from collections.abc import AsyncIterator
 
-engine = create_engine(settings.DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+from sqlalchemy.ext.asyncio import (
+  AsyncEngine,
+  AsyncSession,
+  async_sessionmaker,
+  create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+from core.config import get_settings
+
+
+class Base(DeclarativeBase):
+  pass
+
+
+_engine: AsyncEngine | None = None
+_session_maker: async_sessionmaker[AsyncSession] | None = None
+
+
+def get_engine() -> AsyncEngine:
+  global _engine
+  if _engine is None:
+    settings = get_settings()
+    _engine = create_async_engine(
+      settings.database_dsn,
+      pool_pre_ping=True,
+      pool_size=settings.db_pool_size,
+      max_overflow=settings.db_max_overflow,
+    )
+  return _engine
+
+
+def get_session_maker() -> async_sessionmaker[AsyncSession]:
+  global _session_maker
+  if _session_maker is None:
+    _session_maker = async_sessionmaker(get_engine(), expire_on_commit=False)
+  return _session_maker
+
+
+async def get_db_session() -> AsyncIterator[AsyncSession]:
+  session_maker = get_session_maker()
+  async with session_maker() as session:
+    yield session
+
+
+async def close_engine() -> None:
+  global _engine, _session_maker
+  if _engine is not None:
+    await _engine.dispose()
+  _engine = None
+  _session_maker = None
