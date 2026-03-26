@@ -1,23 +1,33 @@
+from contextlib import asynccontextmanager
+
+import uvicorn
 from fastapi import FastAPI
-from core.database import engine, Base
 
-from api.health import router as health_router
-from api.cart import router as cart_router
-from api.orders import router as orders_router
-from api.management import router as management_router
+from api import api_router
+from core.config import get_settings
+from core.database import close_engine
 
-Base.metadata.create_all(bind=engine)
+settings = get_settings()
 
-app = FastAPI(
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+  yield
+  await close_engine()
+
+
+def create_app() -> FastAPI:
+  app = FastAPI(
     title="Order Service",
-    version="1.2.0"
-)
+    version="1.0.0",
+    debug=settings.app_debug,
+    lifespan=lifespan,
+  )
+  app.include_router(api_router)
+  return app
 
-app.include_router(health_router)
-app.include_router(cart_router)
-app.include_router(orders_router)
-app.include_router(management_router)
+
+app = create_app()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8004)
+  uvicorn.run(app, host=settings.app_host, port=settings.app_port, log_level=settings.log_level.lower())
