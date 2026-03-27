@@ -2,23 +2,26 @@ FROM python:3.13-slim-trixie AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+ENV UV_COMPILE_BYTECODE=1 
+ENV UV_LINK_MODE=copy
+
 WORKDIR /app
-COPY pyproject.toml ./
-RUN uv sync --compile-bytecode --no-cache
+COPY pyproject.toml uv.lock ./
+COPY schemas/README.md schemas/README.md
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY . .
+RUN uv sync --frozen --no-dev
 
 FROM python:3.13-slim-trixie
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
-WORKDIR /home/appuser/app
+WORKDIR /app
 
-COPY --from=builder --chown=appuser:appuser /app/ ./
+COPY --from=builder --chown=appuser:appuser /app/ /app/
 
-ENV PATH="/home/appuser/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uv", "run", "main.py"]
+CMD ["python", "main.py"]
