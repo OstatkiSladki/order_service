@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dependency import CurrentUser, get_current_user, get_db_session
@@ -10,13 +10,14 @@ router = APIRouter()
 
 @router.get("", response_model=OrderListResponse)
 async def get_orders(
+  request: Request,
   status_filter: str | None = Query(None, alias="status"),
   page: int = Query(1, ge=1),
   limit: int = Query(20, ge=1, le=100),
   current_user: CurrentUser = Depends(get_current_user),
   db: AsyncSession = Depends(get_db_session),
 ):
-  service = OrderService(db)
+  service = OrderService(db, request.app.state.catalog_inventory_client)
   items, total_count = await service.get_orders(
     user_id=current_user.user_id,
     status=status_filter,
@@ -28,28 +29,31 @@ async def get_orders(
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=Order)
 async def create_order(
+  request: Request,
   current_user: CurrentUser = Depends(get_current_user),
   db: AsyncSession = Depends(get_db_session),
 ):
-  service = OrderService(db)
+  service = OrderService(db, request.app.state.catalog_inventory_client)
   return await service.create_order(current_user.user_id)
 
 
 @router.get("/{order_id}", response_model=Order)
 async def get_order(
+  request: Request,
   order_id: int,
   current_user: CurrentUser = Depends(get_current_user),
   db: AsyncSession = Depends(get_db_session),
 ):
-  service = OrderService(db)
+  service = OrderService(db, request.app.state.catalog_inventory_client)
   return await service.get_order(order_id, current_user.user_id)
 
 
 @router.get("/{order_id}/pickup-code", response_model=PickupCode)
 async def get_pickup_code(
+  request: Request,
   order_id: int,
   current_user: CurrentUser = Depends(get_current_user),
   db: AsyncSession = Depends(get_db_session),
 ):
-  service = OrderService(db)
+  service = OrderService(db, request.app.state.catalog_inventory_client)
   return await service.get_pickup_code(order_id, current_user.user_id)
