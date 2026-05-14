@@ -14,7 +14,8 @@ class Settings(BaseSettings):
   grpc_port: int = 50051
   grpc_catalog_service_host: str = "catalog-service"
   grpc_catalog_service_port: int = 50054
-  grpc_startup_check_timeout: float = 5.0
+  grpc_startup_check_timeout: float = 30.0
+  grpc_call_timeout: float = 5.0
   grpc_circuit_breaker_failure_threshold: int = 5
   grpc_circuit_breaker_reset_timeout: float = 30.0
   grpc_startup_checks_enabled: bool = True

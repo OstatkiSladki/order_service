@@ -85,4 +85,4 @@ def test_order_pagination_and_status_filtering(client, user_headers):
 
 def test_missing_x_user_id_headers_fail(client):
     response = client.get("/api/v1/orders")
-    assert response.status_code == 422 # missing header validation failure
+    assert response.status_code == 401

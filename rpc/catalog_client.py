@@ -97,7 +97,8 @@ class Reservation:
 class CatalogInventoryClient:
   def __init__(self) -> None:
     settings = get_settings()
-    self._timeout = settings.grpc_startup_check_timeout
+    self._startup_timeout = settings.grpc_startup_check_timeout
+    self._call_timeout = settings.grpc_call_timeout
     self._breaker = _CircuitBreaker(
       settings.grpc_circuit_breaker_failure_threshold,
       settings.grpc_circuit_breaker_reset_timeout,
@@ -114,7 +115,7 @@ class CatalogInventoryClient:
     try:
       response = await self._health_stub.Check(
         health_pb2.HealthCheckRequest(service=_SERVICE_NAME),
-        timeout=self._timeout,
+        timeout=self._startup_timeout,
         wait_for_ready=True,
       )
     except grpc.RpcError as exc:
@@ -164,7 +165,7 @@ class CatalogInventoryClient:
   async def _call(self, func, request):
     self._breaker.before_call()
     try:
-      response = await func(request, timeout=self._timeout, wait_for_ready=True)
+      response = await func(request, timeout=self._call_timeout, wait_for_ready=True)
     except grpc.RpcError as exc:
       self._breaker.record_failure()
       raise exc

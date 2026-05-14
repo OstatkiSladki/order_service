@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -10,17 +11,26 @@ from rpc.catalog_client import CatalogInventoryClient
 from rpc.server import start_grpc_server, stop_grpc_server
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   catalog_inventory_client = CatalogInventoryClient()
   app.state.catalog_inventory_client = catalog_inventory_client
-  if settings.grpc_startup_checks_enabled:
-    await catalog_inventory_client.wait_until_serving()
+
   grpc_server, grpc_health = await start_grpc_server()
   app.state.grpc_server = grpc_server
   app.state.grpc_health = grpc_health
+
+  if settings.grpc_startup_checks_enabled:
+    try:
+      await catalog_inventory_client.wait_until_serving()
+    except Exception as exc:
+      logger.warning(
+        "gRPC startup health check failed for catalog-inventory: %s; continuing with lazy reconnect",
+        exc,
+      )
   try:
     yield
   finally:
